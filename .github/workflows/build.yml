@@ -1,0 +1,112 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CONFIGURATION: Release
+  PLATFORM: x86
+  BUILD_VERSION: ${{ github.run_number }}-${{ github.ref_name }}
+  RELEASE_PREFIX: SteamAchievementManager
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup NuGet
+        uses: nuget/setup-nuget@v2
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Patch .NET project versions
+        shell: pwsh
+        run: |
+          $version = "${{ env.BUILD_VERSION }}"
+          $projects = @(
+            "SAM.API\SAM.API.csproj",
+            "SAM.Game\SAM.Game.csproj",
+            "SAM.Picker\SAM.Picker.csproj"
+          )
+
+          foreach ($project in $projects) {
+            Write-Host "Patching $project to version $version"
+
+            [xml]$xml = Get-Content $project
+            $propertyGroup = $xml.Project.PropertyGroup | Select-Object -First 1
+
+            if ($null -eq $propertyGroup) {
+              $propertyGroup = $xml.CreateElement("PropertyGroup")
+              $xml.Project.AppendChild($propertyGroup) | Out-Null
+            }
+
+            foreach ($name in @("Version", "AssemblyVersion", "FileVersion")) {
+              $node = $propertyGroup.SelectSingleNode($name)
+
+              if ($null -eq $node) {
+                $node = $xml.CreateElement($name)
+                $node.InnerText = $version
+                $propertyGroup.AppendChild($node) | Out-Null
+              } else {
+                $node.InnerText = $version
+              }
+            }
+
+            $xml.Save((Resolve-Path $project))
+          }
+
+      - name: Restore NuGet packages
+        run: nuget restore SAM.sln
+
+      - name: Build solution
+        shell: pwsh
+        run: |
+          msbuild SAM.sln `
+            /m `
+            /verbosity:minimal `
+            /p:Configuration=${{ env.CONFIGURATION }} `
+            /p:Platform=${{ env.PLATFORM }}
+
+      - name: Create git log
+        shell: pwsh
+        run: |
+          $env:TZ = "GMT"
+          git log . > git-log.txt
+
+      - name: Create release archive
+        shell: pwsh
+        run: |
+          $archiveName = "${{ env.RELEASE_PREFIX }}-${{ env.BUILD_VERSION }}.zip"
+          7z a -r -tzip -mx=9 $archiveName ./LICENSE.txt ./git-log.txt ./upload/*.exe ./upload/*.dll
+          Write-Host "Created $archiveName"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.RELEASE_PREFIX }}-${{ env.BUILD_VERSION }}
+          path: ${{ env.RELEASE_PREFIX }}-${{ env.BUILD_VERSION }}.zip
+          if-no-files-found: error
+
+      - name: Create tag and GitHub release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.BUILD_VERSION }}
+          name: ${{ env.RELEASE_PREFIX }} ${{ env.BUILD_VERSION }}
+          body_path: git-log.txt
+          files: ${{ env.RELEASE_PREFIX }}-${{ env.BUILD_VERSION }}.zip
+          token: ${{ github.token }}
