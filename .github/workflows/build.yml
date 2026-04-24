@@ -91,7 +91,7 @@ jobs:
         shell: pwsh
         run: |
           $archiveName = "${{ env.RELEASE_PREFIX }}-${{ env.BUILD_VERSION }}.zip"
-          7z a -r -tzip -mx=9 $archiveName ./LICENSE.txt ./git-log.txt ./upload/*.exe ./upload/*.dll
+          7z a -r -tzip -mx=9 "-x!*/LICENSE.txt" $archiveName ./LICENSE.txt ./git-log.txt ./upload/*.exe ./upload/*.dll
           Write-Host "Created $archiveName"
 
       - name: Upload build artifact
@@ -106,7 +106,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.BUILD_VERSION }}
-          name: ${{ env.RELEASE_PREFIX }} ${{ env.BUILD_VERSION }}
-          body_path: git-log.txt
+          name: ${{ env.BUILD_VERSION }}
           files: ${{ env.RELEASE_PREFIX }}-${{ env.BUILD_VERSION }}.zip
           token: ${{ github.token }}
